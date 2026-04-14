@@ -4,8 +4,9 @@ import { z } from 'zod';
 const QueryGetMessagesSchema = z
   .object({
     channel: z.string().min(1).describe('Username канала (например, "kaliningradtop")'),
-    startDate: z.string().datetime().describe('Начало периода (ISO 8601)'),
-    endDate: z.string().datetime().describe('Конец периода (ISO 8601)'),
+    searchWord: z.string().min(1).describe('Слово для поиска'),
+    startDate: z.string().date().describe('Начало периода'),
+    endDate: z.string().date().describe('Конец периода'),
   })
   .refine(
     (data) => {
@@ -21,7 +22,7 @@ const QueryGetMessagesSchema = z
 
 const MessageResponseSchema = z.object({
   id: z.number().describe('Уникальный идентификатор сообщения'),
-  date: z.string().datetime().describe('Дата публикации сообщения (ISO 8601)'),
+  date: z.string().date().describe('Дата публикации сообщения'),
   message: z.string().describe('Текст сообщения'),
   hasMedia: z.boolean().describe('Флаг наличия медиа-вложений'),
 });

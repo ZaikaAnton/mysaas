@@ -4,7 +4,7 @@ import { AppController } from './app.controller';
 import { ConfigModule } from '@nestjs/config';
 import { TelegramModule } from '../telegram/telegram.module';
 import { APP_PIPE } from '@nestjs/core';
-import { ZodValidationPipe } from '../common/pipes/zodValidator.pipe';
+import { ZodValidationPipe } from 'nestjs-zod';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true }), TelegramModule],
