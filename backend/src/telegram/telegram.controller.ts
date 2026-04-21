@@ -22,6 +22,7 @@ export class TelegramController {
       query.channel,
       startDate,
       endDate,
+      query.searchWord,
     );
 
     const response = messages.map((msg) => ({

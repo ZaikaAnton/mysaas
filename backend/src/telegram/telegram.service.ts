@@ -6,6 +6,7 @@ import input from 'input';
 
 @Injectable()
 export class TelegramService implements OnModuleInit {
+  private static readonly PAGE_SIZE = 100;
   private client?: TelegramClient;
   private readonly logger = new Logger(TelegramService.name);
 
@@ -56,81 +57,146 @@ export class TelegramService implements OnModuleInit {
     }
     return this.client;
   }
-
-  // async getChannelInfo(username: string) {
-  //   const client = this.getClient();
-  //   try {
-  //     const entity = await client.getEntity(username);
-  //     this.logger.log(`ℹ️ Информация о канале @${username} успешно получена`);
-  //     return entity;
-  //   } catch (error) {
-  //     this.logger.error(`Ошибка при получении информации о канале @${username}`, error);
-  //     throw error;
-  //   }
-  // }
-
-  /**
-   * Получить все сообщения канала за указанный период (по дате публикации)
-   * @param channelUsername - юзернейм канала (например, 'kaliningradtop')
-   * @param startDate - начало периода (включительно)
-   * @param endDate - конец периода (включительно)
-   * @returns массив сообщений Api.Message, попадающих в диапазон дат
-   */
+  // Сервисный метод для получения сообщений из канала за период + поиск по слову
   async getMessagesInDateRange(
     channelUsername: string,
     startDate: Date,
     endDate: Date,
+    searchWord: string,
   ): Promise<Api.Message[]> {
     const client = this.getClient();
     const entity = await client.getEntity(channelUsername);
-
-    const startTimestamp = Math.floor(startDate.getTime() / 1000);
-    const endTimestamp = Math.floor(endDate.getTime() / 1000);
-
+    this.validateDateRange(startDate, endDate);
+    const dateRange = this.normalizeDateRange(startDate, endDate);
+    const normalizedSearchWord = searchWord.trim().toLowerCase();
     const collectedMessages: Api.Message[] = [];
-    let offsetId = 0; // начинаем с самых новых
-    const limit = 100; // за раз запрашиваем до 100 сообщений
+    let offsetId = 0;
+    let isFirstRequest = true;
     let reachedOldMessages = false;
 
-    this.logger.log(
-      `📆 Запрашиваю сообщения из @${channelUsername} с ${startDate.toLocaleString()} по ${endDate.toLocaleString()}`,
-    );
+    this.logDateRangeRequest(channelUsername, dateRange.start, dateRange.end);
 
     while (!reachedOldMessages) {
-      const messages = (await client.getMessages(entity, {
-        limit,
+      const messages = await this.fetchMessageBatch(client, entity, {
         offsetId,
-      })) as Api.Message[];
+        isFirstRequest,
+        end: dateRange.end,
+      });
+
+      isFirstRequest = false;
 
       if (messages.length === 0) break;
 
-      for (const msg of messages) {
-        const msgDate = msg.date; // timestamp в секундах
+      reachedOldMessages = this.collectMessagesInRange(
+        messages,
+        dateRange.startMs,
+        collectedMessages,
+        normalizedSearchWord,
+      );
 
-        // Сообщения идут от новых к старым.
-        // Если сообщение новее конца периода — пропускаем, но продолжаем (может дальше будут нужные)
-        if (msgDate > endTimestamp) {
-          continue;
-        }
-
-        // Если сообщение старше начала периода — все последующие будут ещё старше, можно останавливаться
-        if (msgDate < startTimestamp) {
-          reachedOldMessages = true;
-          break;
-        }
-
-        // Сообщение попадает в период
-        collectedMessages.push(msg);
-      }
-
-      // Если мы не дошли до старых сообщений, устанавливаем offsetId на id последнего сообщения в батче минус 1
       if (!reachedOldMessages) {
-        const lastMsg = messages[messages.length - 1];
-        offsetId = lastMsg.id - 1;
+        const nextOffsetId = this.getNextOffsetId(messages);
+        if (nextOffsetId === null) break;
+        offsetId = nextOffsetId;
       }
     }
 
-    this.logger.log(`✅ Найдено ${collectedMessages.length} сообщений в заданном диапазоне`);
+    this.logger.log(`✅ Найдено ${collectedMessages.length} сообщений`);
     return collectedMessages;
+  }
+
+  private validateDateRange(startDate: Date, endDate: Date): void {
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      throw new Error('Invalid date range: startDate or endDate is not a valid date');
+    }
+
+    if (startDate.getTime() > endDate.getTime()) {
+      throw new Error('Invalid date range: startDate must be before or equal to endDate');
+    }
+  }
+
+  private normalizeDateRange(
+    startDate: Date,
+    endDate: Date,
+  ): {
+    start: Date;
+    end: Date;
+    startMs: number;
+  } {
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+
+    return {
+      start,
+      end,
+      startMs: start.getTime(),
+    };
+  }
+
+  private logDateRangeRequest(channelUsername: string, start: Date, end: Date): void {
+    this.logger.log(
+      `📆 Запрашиваю сообщения из @${channelUsername} с ${start.toISOString()} по ${end.toISOString()}`,
+    );
+  }
+
+  private async fetchMessageBatch(
+    client: TelegramClient,
+    entity: Parameters<TelegramClient['getMessages']>[0],
+    params: { offsetId: number; isFirstRequest: boolean; end: Date },
+  ): Promise<Api.Message[]> {
+    return (await client.getMessages(entity, {
+      limit: TelegramService.PAGE_SIZE,
+      offsetId: params.offsetId,
+      ...(params.isFirstRequest && {
+        offsetDate: Math.floor(params.end.getTime() / 1000),
+      }),
+    })) as Api.Message[];
+  }
+
+  private collectMessagesInRange(
+    messages: Api.Message[],
+    startMs: number,
+    collectedMessages: Api.Message[],
+    searchWord?: string,
+  ): boolean {
+    for (const msg of messages) {
+      if (!msg.date) continue;
+
+      const msgMs = msg.date * 1000;
+      if (msgMs < startMs) {
+        return true;
+      }
+
+      if (this.matchesSearchWord(msg, searchWord)) {
+        collectedMessages.push(msg);
+      }
+    }
+
+    return false;
+  }
+
+  private getNextOffsetId(messages: Api.Message[]): number | null {
+    const lastMsg = messages[messages.length - 1];
+    if (!lastMsg?.id) {
+      return null;
+    }
+
+    return lastMsg.id - 1;
+  }
+
+  private matchesSearchWord(message: Api.Message, searchWord?: string): boolean {
+    if (!searchWord) {
+      return true;
+    }
+
+    const text = message.message?.toLowerCase();
+    if (!text) {
+      return false;
+    }
+
+    return text.includes(searchWord);
   }
 }
