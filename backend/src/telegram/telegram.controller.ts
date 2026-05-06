@@ -1,7 +1,8 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { TelegramService } from './telegram.service';
-import { MessageResponseDto, QueryGetMessagesDto } from './dto/getMessages.dto';
+import { MessageResponseDto, QueryGetMessagesDto } from './dto/get-messages.dto';
+import { ChannelResponseDto, QuerySearchChannelsDto } from './dto/search-channels-by-keyword.dto';
 
 @ApiTags('telegram')
 @Controller('telegram')
@@ -33,5 +34,17 @@ export class TelegramController {
     }));
 
     return response;
+  }
+
+  @Get('channels/search')
+  @ApiOperation({ summary: 'Найти каналы по ключевому слову в постах' })
+  @ApiOkResponse({
+    description: 'Список каналов, где встречается ключевое слово',
+    type: [ChannelResponseDto],
+  })
+  async searchChannelsByKeyword(
+    @Query() query: QuerySearchChannelsDto,
+  ): Promise<ChannelResponseDto[]> {
+    return this.telegramService.searchChannelsByKeyword(query.keyword, query.limit);
   }
 }

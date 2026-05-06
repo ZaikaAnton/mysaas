@@ -4,6 +4,12 @@ import { Api, TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import input from 'input';
 
+type ChannelSearchResult = {
+  id: string;
+  title: string;
+  username?: string;
+};
+
 @Injectable()
 export class TelegramService implements OnModuleInit {
   private static readonly PAGE_SIZE = 100;
@@ -198,5 +204,60 @@ export class TelegramService implements OnModuleInit {
     }
 
     return text.includes(searchWord);
+  }
+
+  async searchChannelsByKeyword(keyword: string, limit = 200): Promise<ChannelSearchResult[]> {
+    const client = this.getClient();
+    const normalizedKeyword = keyword.trim().toLowerCase();
+
+    if (!normalizedKeyword) {
+      return [];
+    }
+
+    this.logger.log(`🔎 searchGlobal channels by keyword: "${normalizedKeyword}"`);
+
+    let result: Api.messages.TypeMessages;
+    try {
+      result = await client.invoke(
+        new Api.messages.SearchGlobal({
+          q: normalizedKeyword,
+          offsetPeer: new Api.InputPeerEmpty(),
+          offsetId: 0,
+          offsetRate: 0,
+          filter: new Api.InputMessagesFilterEmpty(),
+          limit,
+          minDate: 0,
+          maxDate: 0,
+        }),
+      );
+    } catch (error) {
+      this.logger.error(`❌ Ошибка SearchGlobal по ключу "${normalizedKeyword}"`, error);
+      return [];
+    }
+
+    if (result instanceof Api.messages.MessagesNotModified) {
+      this.logger.log('✅ Найдено каналов: 0');
+      return [];
+    }
+
+    const channelsMap = new Map<string, ChannelSearchResult>();
+    const chats = result.chats;
+
+    for (const chat of chats) {
+      if (chat.className !== 'Channel') continue;
+
+      const id = chat.id.toString();
+      const username = typeof chat.username === 'string' ? chat.username : undefined;
+
+      channelsMap.set(id, {
+        id,
+        title: chat.title,
+        username,
+      });
+    }
+
+    const channels = Array.from(channelsMap.values());
+    this.logger.log(`✅ Найдено каналов: ${channels.length}`);
+    return channels;
   }
 }
