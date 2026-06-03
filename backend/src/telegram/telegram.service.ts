@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Api, TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
@@ -11,20 +11,15 @@ type ChannelSearchResult = {
 };
 
 @Injectable()
-export class TelegramService implements OnModuleInit {
+export class TelegramService {
   private static readonly PAGE_SIZE = 100;
   private client?: TelegramClient;
+  private clientInitPromise?: Promise<TelegramClient>;
   private readonly logger = new Logger(TelegramService.name);
 
   constructor(private readonly configService: ConfigService) {}
 
-  async onModuleInit() {
-    console.log('🟢 onModuleInit started');
-    await this.initClient();
-    console.log('🟢 initClient completed');
-  }
-
-  private async initClient(): Promise<void> {
+  private async initClient(): Promise<TelegramClient> {
     const apiId = Number(this.configService.get<string>('TELEGRAM_API_ID'));
     const apiHash = this.configService.get<string>('TELEGRAM_API_HASH');
     const phoneNumber = this.configService.get<string>('TELEGRAM_PHONE');
@@ -49,19 +44,37 @@ export class TelegramService implements OnModuleInit {
     });
 
     const newSession = String(this.client.session.save());
-    this.logger.log('✅ Авторизация успешна!');
-    this.logger.log('📌 Скопируйте строку ниже и добавьте в .env как TELEGRAM_SESSION:');
-    this.logger.log(newSession);
+    console.log('✅ Авторизация успешна!');
+    console.log('📌 Скопируйте строку ниже и добавьте в .env как TELEGRAM_SESSION:');
+    console.log(newSession);
 
     const me = await this.client.getMe();
-    this.logger.log(`👤 Подключены как: ${me.firstName} (@${me.username})`);
+    console.log(`👤 Подключены как: ${me.firstName} (@${me.username})`);
+
+    return this.client;
   }
 
-  getClient(): TelegramClient {
-    if (!this.client) {
-      throw new Error('Telegram client not initialized yet');
+  private async ensureClient(): Promise<TelegramClient> {
+    if (this.configService.get<string>('ENABLE_TELEGRAM_PARSER', 'true') !== 'true') {
+      throw new Error('Telegram parser отключен (ENABLE_TELEGRAM_PARSER=false)');
     }
-    return this.client;
+
+    if (this.client) {
+      return this.client;
+    }
+
+    if (!this.clientInitPromise) {
+      console.log('Подключаю Telegram parser (gramJS)...');
+      this.clientInitPromise = this.initClient().catch((error) => {
+        this.clientInitPromise = undefined;
+        console.log(
+          `Telegram parser не подключился: ${error instanceof Error ? error.message : error}`,
+        );
+        throw error;
+      });
+    }
+
+    return this.clientInitPromise;
   }
   // Сервисный метод для получения сообщений из канала за период + поиск по слову
   async getMessagesInDateRange(
@@ -70,7 +83,7 @@ export class TelegramService implements OnModuleInit {
     endDate: Date,
     searchWord: string,
   ): Promise<Api.Message[]> {
-    const client = this.getClient();
+    const client = await this.ensureClient();
     const entity = await client.getEntity(channelUsername);
     this.validateDateRange(startDate, endDate);
     const dateRange = this.normalizeDateRange(startDate, endDate);
@@ -107,7 +120,7 @@ export class TelegramService implements OnModuleInit {
       }
     }
 
-    this.logger.log(`✅ Найдено ${collectedMessages.length} сообщений`);
+    console.log(`✅ Найдено ${collectedMessages.length} сообщений`);
     return collectedMessages;
   }
 
@@ -143,7 +156,7 @@ export class TelegramService implements OnModuleInit {
   }
 
   private logDateRangeRequest(channelUsername: string, start: Date, end: Date): void {
-    this.logger.log(
+    console.log(
       `📆 Запрашиваю сообщения из @${channelUsername} с ${start.toISOString()} по ${end.toISOString()}`,
     );
   }
@@ -207,14 +220,14 @@ export class TelegramService implements OnModuleInit {
   }
 
   async searchChannelsByKeyword(keyword: string, limit = 200): Promise<ChannelSearchResult[]> {
-    const client = this.getClient();
+    const client = await this.ensureClient();
     const normalizedKeyword = keyword.trim().toLowerCase();
 
     if (!normalizedKeyword) {
       return [];
     }
 
-    this.logger.log(`🔎 searchGlobal channels by keyword: "${normalizedKeyword}"`);
+    console.log(`🔎 searchGlobal channels by keyword: "${normalizedKeyword}"`);
 
     let result: Api.messages.TypeMessages;
     try {
@@ -231,12 +244,12 @@ export class TelegramService implements OnModuleInit {
         }),
       );
     } catch (error) {
-      this.logger.error(`❌ Ошибка SearchGlobal по ключу "${normalizedKeyword}"`, error);
+      console.log(`❌ Ошибка SearchGlobal по ключу "${normalizedKeyword}"`, error);
       return [];
     }
 
     if (result instanceof Api.messages.MessagesNotModified) {
-      this.logger.log('✅ Найдено каналов: 0');
+      console.log('✅ Найдено каналов: 0');
       return [];
     }
 
@@ -257,7 +270,7 @@ export class TelegramService implements OnModuleInit {
     }
 
     const channels = Array.from(channelsMap.values());
-    this.logger.log(`✅ Найдено каналов: ${channels.length}`);
+    console.log(`✅ Найдено каналов: ${channels.length}`);
     return channels;
   }
 }
